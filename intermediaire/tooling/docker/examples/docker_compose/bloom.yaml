@@ -1,0 +1,152 @@
+x-common-infos:
+  # Env variables stored in a .env file at same level than docker-compose.yaml
+  environment: &common-env
+    POSTGRES_HOSTNAME: ${POSTGRES_HOSTNAME:-postgres_bloom}
+    POSTGRES_DB: ${POSTGRES_DB:-bloom_db}
+    POSTGRES_USER: ${POSTGRES_USER:-bloom_user}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bloom}
+    LOGGING_LEVEL: ${LOGGING_LEVEL:-INFO}
+
+services:
+  bloom-backend:
+    container_name: bloom_backend
+    hostname: bloom-backend
+    image: d4g/bloom-backend:${VERSION:-latest}
+    working_dir: /project/backend
+    command:
+        - bash
+        - -c
+        - |
+            echo "Starting Scheduler" &&
+            service cron start && uvicorn bloom.app:app --host 0.0.0.0 --reload
+    volumes:
+      - ./:/project/
+      - ./data:/project/data
+    environment:
+      <<: *common-env
+      POSTGRES_PORT: 5432
+      STREAMLIT_SERVER_ADDRESS: ${STREAMLIT_SERVER_ADDRESS:-0.0.0.0}
+      REDIS_HOST: bloom-redis
+      REDIS_PORT: 6379
+      WATCHFILES_FORCE_POLLING: true
+    ports:
+      - ${API_PORT:-8000}:8000
+    networks:
+      - bloom_net
+    depends_on:
+      bloom-init:
+        condition: service_completed_successfully
+  bloom-redis:
+    image: redis:7-alpine
+    container_name: bloom_redis
+    hostname: bloom-redis
+    restart: always
+    command:
+      - sh
+      - -c
+      - redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - ${REDIS_PORT:-6379}:6379
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    volumes: 
+      - bloom-redis:/data
+    networks:
+      - bloom_net
+
+  bloom-postgres:
+    container_name: postgres_bloom
+    hostname: bloom-postgres
+    image: ${POSTGIS_IMAGE:-postgis/postgis:14-3.3-alpine}
+    environment:
+      <<: *common-env
+    ports:
+      - ${POSTGRES_PORT:-5432}:5432
+    volumes:
+      - bloom-data:/var/lib/postgresql/data
+    networks:
+      - bloom_net
+    healthcheck:
+      # PostGis database initialization is done with two steps (postgres+postgis)
+      # This causes healthcheck to be valid before real full initialization
+      # and so causing dependent containers starting before full db initialization
+      # This lines check 3 consecutive times database status instead of only 1
+      # This is suffisiant to avoir first valid check and cover full initialization
+      # If check fails, waiting 5s to recheck, max 3 times and then fails.
+      test:
+        [
+          'CMD-SHELL',
+          "for i in 1 2 3; do pg_isready --quiet --dbname=$${POSTGRES_DB:-bloom_db} --username=$${POSTGRES_USER:-bloom_user} && break || sleep 5; done"
+        ]
+      interval: 15s
+      timeout: 45s
+      retries: 3
+      start_period: 0s
+
+  bloom-frontend:
+    container_name: bloom_frontend
+    hostname: bloom-frontend
+    image: d4g/bloom-frontend:${VERSION:-latest}
+    #command: env node ./node_modules/next/dist/bin/next start --hostname 0.0.0.0
+    #command: npm run dev
+    #command: yarn dev
+    command: sh -c "if [ ! -f node_modules/next/dist/bin/next ]; then npm install && npm run build; fi; npm run dev"
+    tty: true
+    stdin_open: true
+    working_dir: /app
+    build:
+        context: .
+        dockerfile: ./docker/frontend/dev.Dockerfile
+        args:
+           APP_DIR: /app
+        
+    volumes:
+      - ./data:/app/public/data
+      - ./data:/project/frontend/public/data
+    environment:
+      LOGGING_LEVEL: ${LOGGING_LEVEL:-INFO}
+    networks:
+      - bloom_net
+    ports:
+      - ${HTTP_PORT:-3000}:3000
+    depends_on:
+      bloom-init:
+        condition: service_completed_successfully
+
+  bloom-init:
+    container_name: bloom_init
+    hostname: bloom-init
+    image: d4g/bloom-backend:${VERSION:-latest}
+
+    # Nominal start:
+    command: /bin/bash -c "cd backend;alembic upgrade head"
+    # Debug start:
+    #command: bash
+    #tty: true
+    #stdin_open: true
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        IMAGE_PYTHON: ${IMAGE_PYTHON:-python:3.10-slim-bullseye}
+        POETRY_VERSION: ${POETRY_VERSION:-1.8.2}
+
+    environment:
+      <<: *common-env
+      POSTGRES_PORT: 5432
+    volumes:
+      - ./:/project/
+    networks:
+      - bloom_net
+    depends_on:
+      bloom-postgres:
+        condition: service_healthy # The service is working and still running
+
+volumes:
+  bloom-data:
+  bloom-redis:
+
+networks:
+  bloom_net:
+    name: bloom_net
