@@ -28,9 +28,9 @@ Le contenu est organisé en trois niveaux, pour suivre l'évolution des projets 
 
 - **Sécurité** : Authentification
 - **Optimisation**
-  - Performance Backend
-  - Performance Frontend
-- **DevOps** : Déploiement et CI/CD
+  - [Performance Backend](./advanced/optimisation/backend/README.md)
+  - [Performance Frontend](./advanced/optimisation/frontend/README.md)
+- **DevOps** : [Déploiement et CI/CD](./advanced/devops/README.md)
 - Type de contenu : Résoudre des problématiques spécifiques, qui apparaisent à l'usage et en vue d'une utilisation en productionpar plusieurs utilisateurs en concurrence.
 
 ## 🤝 Contribution
